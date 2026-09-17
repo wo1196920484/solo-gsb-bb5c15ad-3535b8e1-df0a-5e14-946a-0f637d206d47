@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { parseCalendar } from '../src/ical-engine/parser';
 import { expandAll } from '../src/ical-engine/expansion';
 import { detectConflicts, instanceId } from '../src/ical-engine/conflicts';
+import { diffInstances, instanceIdentity } from '../src/ical-engine/diff';
 import { normalizeCalendar } from '../src/ical-engine/normalizer';
 
 const ICS = `BEGIN:VCALENDAR
@@ -93,6 +94,8 @@ assert.strictEqual(daily.overrides.length, 2, 'two overrides grouped');
 
 const range = rangeFor('2026-03-05', '2026-04-10');
 const expanded = expandAll(masters, range, { disabledOverrides: new Set(), editedRrule: {} });
+// 原始日历基线（无编辑、无停用）
+const baseline0 = expandAll(masters, range, { disabledOverrides: new Set(), editedRrule: {} });
 
 // 1) EXDATE
 assert.ok(
@@ -192,6 +195,63 @@ const re4 = expandAll(
 );
 assert.ok(re4.rruleErrors['daily@x'], 'invalid rule reported');
 assert.ok(re4.instances.some((i) => i.uid === 'daily@x'), 'falls back to original rule');
+
+// 8b) 变更影响：无编辑时与基线完全一致
+assert.strictEqual(diffInstances(expanded.instances, expanded.instances).length, 0, 'identical sets yield no changes');
+const baseChanges = diffInstances(baseline0.instances, expanded.instances);
+assert.strictEqual(baseChanges.length, 0, 'fresh expansion equals baseline (no effective edits)');
+
+// 8c) 停用覆盖例外：同一身份（UID + 原始 recurrence key）标记为移动/字段变化，不是一删一增
+{
+  const changes = diffInstances(baseline0.instances, re.instances);
+  const mar9Key = utc(2026, 2, 9, 13); // RECURRENCE-ID 09:00 EDT（3/8 已入夏令时）
+  const same = changes.filter((c) => c.identity === `daily@x#${mar9Key}`);
+  assert.strictEqual(same.length, 1, 'override identity matched exactly once');
+  const ch = same[0];
+  assert.ok(ch.before && ch.after, 'before/after both present -> modified, not add/remove');
+  assert.deepStrictEqual(
+    ch.kinds.slice().sort(),
+    ['end-moved', 'location', 'start-moved', 'summary'],
+    'start/end moved + summary/location changed'
+  );
+  assert.ok(
+    !changes.some((c) => c.kinds[0] === 'added' && c.uid === 'daily@x' && c.recurrenceKey === mar9Key),
+    'move must not be reported as added'
+  );
+  assert.ok(
+    !changes.some((c) => c.kinds[0] === 'removed' && c.uid === 'daily@x' && c.recurrenceKey === mar9Key),
+    'move must not be reported as removed'
+  );
+}
+
+// 8d) 停用 CANCELLED 例外：原实例恢复，标记为新增
+{
+  const changes = diffInstances(baseline0.instances, re2.instances);
+  const mar10 = utc(2026, 2, 10, 13); // EDT
+  const added = changes.filter((c) => c.kinds[0] === 'added' && c.uid === 'daily@x');
+  assert.ok(
+    added.some((c) => c.recurrenceKey === mar10),
+    'restored cancelled instance reported as added'
+  );
+}
+
+// 8e) 编辑 RRULE 为 WEEKLY：仅基线存在的日实例标记移除，改期过的例外身份保持不变
+{
+  const changes = diffInstances(baseline0.instances, re3.instances);
+  const removedKeys = changes.filter((c) => c.kinds[0] === 'removed').map((c) => c.recurrenceKey);
+  assert.ok(removedKeys.includes(utc(2026, 2, 7, 14)), 'Mar 7 daily occurrence removed');
+  assert.ok(removedKeys.includes(utc(2026, 2, 8, 13)), 'Mar 8 daily occurrence removed');
+  const mar9Key = utc(2026, 2, 9, 13); // 09:00 EDT
+  assert.ok(
+    !removedKeys.includes(mar9Key),
+    'moved override keeps identity under the new rule (orphan at same time)'
+  );
+  // 身份键确实是 UID + recurrenceKey
+  assert.strictEqual(
+    instanceIdentity(re.instances.find((i) => i.startUtc === utc(2026, 2, 9, 13))!),
+    `daily@x#${mar9Key}`
+  );
+}
 
 // 9) synthetic timezone (Europe/Berlin no VTIMEZONE) keeps 15:00 wall across DST (Mar 29 2026)
 const berlin = re.instances.filter((i) => i.uid === 'synth@x');

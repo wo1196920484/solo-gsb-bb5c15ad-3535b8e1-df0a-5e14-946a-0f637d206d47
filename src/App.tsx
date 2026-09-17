@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseCalendar } from './ical-engine/parser';
 import { expandAll } from './ical-engine/expansion';
 import { detectConflicts, instanceId } from './ical-engine/conflicts';
+import { diffInstances, instanceIdentity } from './ical-engine/diff';
+import type { InstanceChange } from './ical-engine/diff';
 import { normalizeCalendar } from './ical-engine/normalizer';
 import { SAMPLE_ICS } from './ical-engine/samples';
 import type {
@@ -12,7 +14,7 @@ import type {
   Warning,
 } from './ical-engine/types';
 import { SourceView } from './components/SourceView';
-import { InstanceTable } from './components/InstanceTable';
+import { InstanceTable, type AuditTab } from './components/InstanceTable';
 import { SeriesPanel } from './components/SeriesPanel';
 import { addDays, downloadText, localMidnightUtcSec, ymd } from './utils/format';
 
@@ -51,6 +53,9 @@ export default function App() {
   const [disabledOverrides, setDisabledOverrides] = useState<Set<string>>(new Set());
   const [editedRrule, setEditedRrule] = useState<Record<string, string>>({});
   const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
+  const [rightTab, setRightTab] = useState<AuditTab>('visible');
+  /** 变更影响联动：被移除实例以幽灵行进入生效表 */
+  const [ghostInstance, setGhostInstance] = useState<Instance | null>(null);
 
   const reparse = useCallback((text: string): ParseOutcome => {
     const result = parseCalendar(text);
@@ -69,6 +74,7 @@ export default function App() {
     setDisabledOverrides(new Set());
     setEditedRrule({});
     setSelection(EMPTY_SELECTION);
+    setGhostInstance(null);
     return next;
   }, []);
 
@@ -91,6 +97,26 @@ export default function App() {
     return expandAll(outcome.masters, range, { disabledOverrides, editedRrule });
   }, [outcome, range, disabledOverrides, editedRrule]);
 
+  // 原始日历基线：不应用任何规则编辑与例外停用，作为“变更影响”的对照侧
+  const baseline = useMemo(() => {
+    if (!outcome?.ok || !range) return null;
+    return expandAll(outcome.masters, range, {
+      disabledOverrides: new Set(),
+      editedRrule: {},
+    });
+  }, [outcome, range]);
+
+  // 调整日期范围后立即重算，并清除上一范围联动出的幽灵行
+  useEffect(() => {
+    setGhostInstance(null);
+  }, [startDate, endDate]);
+
+  // 变更影响：基线生效实例 vs 当前编辑状态下的生效实例
+  const changes = useMemo(() => {
+    if (!baseline || !expansion) return [] as InstanceChange[];
+    return diffInstances(baseline.instances, expansion.instances);
+  }, [baseline, expansion]);
+
   const conflicts = useMemo(
     () => (expansion ? detectConflicts(expansion.instances) : null),
     [expansion]
@@ -104,21 +130,36 @@ export default function App() {
   }, [outcome, expansion]);
 
   const selectedInstance = useMemo<Instance | null>(() => {
-    if (!expansion || !selection.instanceKey) return null;
-    const hit = expansion.instances.find((i) => instanceId(i) === selection.instanceKey);
-    if (hit) return hit;
-    return (
-      expansion.cancelled.find((i) => instanceId(i) === selection.instanceKey) ??
-      expansion.excluded.find((i) => instanceId(i) === selection.instanceKey) ??
-      null
-    );
-  }, [expansion, selection]);
+    if (!selection.instanceKey) return null;
+    const find = (list: Instance[]): Instance | undefined =>
+      list.find((i) => instanceId(i) === selection.instanceKey);
+    if (expansion) {
+      const hit =
+        find(expansion.instances) ??
+        find(expansion.cancelled) ??
+        find(expansion.excluded);
+      if (hit) return hit;
+    }
+    // 被移除实例只存在于基线侧（变更影响联动）
+    return baseline ? (find(baseline.instances) ?? find(baseline.cancelled) ?? find(baseline.excluded) ?? null) : null;
+  }, [expansion, baseline, selection]);
+
+  // 幽灵行若在当前展开中重新出现（或已不在基线中）则失效
+  const activeGhost = useMemo<Instance | null>(() => {
+    if (!ghostInstance || !expansion || !baseline) return ghostInstance;
+    if (expansion.instances.some((i) => instanceId(i) === instanceId(ghostInstance))) return null;
+    if (!baseline.instances.some((i) => instanceId(i) === instanceId(ghostInstance))) return null;
+    return ghostInstance;
+  }, [ghostInstance, expansion, baseline]);
+
+  const selectedIdentity = selectedInstance ? instanceIdentity(selectedInstance) : null;
 
   // ---------- 交互 ----------
 
   const selectInstance = useCallback(
-    (inst: Instance) => {
+    (inst: Instance, ghost: Instance | null = null) => {
       const peers = conflicts?.byKey.get(instanceId(inst)) ?? [];
+      setGhostInstance(ghost);
       setSelection({
         instanceKey: instanceId(inst),
         seriesId: inst.seriesId,
@@ -132,6 +173,22 @@ export default function App() {
       });
     },
     [conflicts]
+  );
+
+  // 点击变更影响项：联动实例表与 ICS 源码定位
+  const selectChange = useCallback(
+    (change: InstanceChange) => {
+      if (change.after) {
+        // 新增 / 修改：切回生效表并选中候选实例
+        setRightTab('visible');
+        selectInstance(change.after, null);
+      } else if (change.before) {
+        // 移除：候选侧不存在，以幽灵行在生效表展示，仍可定位原始块与行号
+        setRightTab('visible');
+        selectInstance(change.before, change.before);
+      }
+    },
+    [selectInstance]
   );
 
   const focusSeries = useCallback((m: MasterSeries) => {
@@ -329,6 +386,14 @@ export default function App() {
                 <span>
                   冲突组 <b style={{ color: 'var(--conflict)' }}>{conflicts?.groups.length ?? 0}</b>
                 </span>
+                {changes.length > 0 && (
+                  <span>
+                    变更影响{' '}
+                    <b style={{ color: 'var(--warn)', cursor: 'pointer' }} onClick={() => setRightTab('impact')}>
+                      {changes.length}
+                    </b>
+                  </span>
+                )}
               </span>
             )}
           </div>
@@ -401,6 +466,12 @@ export default function App() {
               instances={expansion.instances}
               cancelled={expansion.cancelled}
               excluded={expansion.excluded}
+              tab={rightTab}
+              onTabChange={setRightTab}
+              changes={changes}
+              onSelectChange={selectChange}
+              selectedIdentity={selectedIdentity}
+              ghostInstance={activeGhost}
               selectedKey={selection.instanceKey}
               onSelect={selectInstance}
             />

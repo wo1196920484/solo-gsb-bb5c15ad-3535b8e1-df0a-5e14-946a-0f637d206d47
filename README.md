@@ -21,6 +21,7 @@
 | 联动定位 | 点击实例/冲突/告警，右侧原始 ICS 高亮所属主事件块、RECURRENCE-ID 块与原始行号 |
 | 例外停用 | 勾选框即时停用任意一条例外（含 CANCELLED），原实例立即恢复并重算冲突 |
 | 规则编辑 | 就地修改 RRULE 文本，合法即实时重算；非法时显示解析错误并回退到上一条有效规则 |
+| 变更影响 | 以 **UID + 原始 recurrence key** 为实例身份，比对原始日历与编辑后的生效实例：新增 / 移除 / 开始·结束移动 / 标题·地点·状态变化逐项列出前后值；移动不会误报成一删一增。支持按变更类型筛选，点击差异项联动实例表与 ICS 源码定位，无改动时显示空状态 |
 | 规范化导出 | 输出 CRLF、RFC 5545 折行、按 UID 排序、内聚所需 VTIMEZONE（含合成时区），可下载/复制 |
 
 ## 一条命令启动（Docker）
@@ -77,13 +78,20 @@ npm run smoke      # 引擎语义冒烟测试（RRULE/RDATE/EXDATE/覆盖/取消
      红框=冲突方事件块，高亮行=RRULE/RDATE/EXDATE/RECURRENCE-ID 原始行）。
    - **中栏**：每个 UID 一张规则卡，可编辑 RRULE、勾选停用具条例外，并显示
      RDATE/EXDATE 清单与行号。
-   - **右栏**：实例表三个页签——生效 / 已取消 / 已排除；支持地点关键字过滤与
-     「仅看冲突」。DST 标记表示该实例相对序列首个实例的 UTC 偏移已变化。
-4. 点击任一实例：右表选中、左栏原文同步定位；有冲突时冲突方事件块同步红框高亮。
+   - **右栏**：实例表四个页签——生效 / 已取消 / 已排除 / **变更影响**；生效表支持地点关键字过滤与
+     「仅看冲突」。「变更影响」比较原始日历与当前编辑（RRULE 修改、例外停用）后的差异，可按
+     新增 / 移除 / 移动 / 字段变化筛选，重解析或调整日期范围后立即重算。DST 标记表示该实例相对
+     序列首个实例的 UTC 偏移已变化。
+4. 点击任一实例或差异项：右表选中、左栏原文同步定位；有冲突时冲突方事件块同步红框高亮。
+   被移除的实例在生效表中以「已移除」幽灵行展示，仍可定位其原始块与行号。
 5. 点右上「导出规范化 ICS」下载 `normalized.ics`，或「复制 ICS」到剪贴板。
 
 ## 语义约定
 
+- **变更影响身份**：实例身份为 `UID#原始 recurrence key`（覆盖实例取 RECURRENCE-ID 对应时刻，
+  普通 RRULE/RDATE/单次实例取原始起点）。覆盖改期后两侧身份仍相同，只标记开始/结束移动；
+  仅候选侧存在标为新增，仅原始侧存在标为移除。比对只纳入当前查询范围内的生效实例，
+  已取消 / 已排除的审计行不参与。
 - **时间匹配**：EXDATE/RECURRENCE-ID 按绝对时刻匹配（DATE 型按当天 00:00）。
   请保证它们与 DTSTART 的时区形式一致（同为 `TZID=` 或同为 UTC `Z`）。
 - **RDATE-PERIOD**：使用 PERIOD 自带的结束时间反推该实例时长。
@@ -102,10 +110,11 @@ src/
 │   ├── timezones.ts    # Intl 探测 DST 切换点，合成 VTIMEZONE
 │   ├── expansion.ts    # RRULE 迭代 + RDATE/EXDATE/覆盖/取消 + 范围与上限
 │   ├── conflicts.ts    # LOCATION 维度半开区间重叠检测
+│   ├── diff.ts         # 变更影响：UID+原始 recurrence key 身份比对（新增/移除/移动/字段）
 │   ├── normalizer.ts   # 规范化 ICS 输出（排序、时区内聚、规则/停用生效）
 │   ├── types.ts        # 领域模型
 │   └── samples.ts      # 内置示例
-├── components/         # SourceView / InstanceTable / SeriesPanel
+├── components/         # SourceView / InstanceTable / SeriesPanel / ChangeImpact
 ├── utils/format.ts
 ├── App.tsx
 └── main.tsx

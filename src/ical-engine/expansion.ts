@@ -81,6 +81,7 @@ function buildInstance(input: BuildInput): Instance {
     const ov = input.override;
     return {
       key: startUtc,
+      recurrenceKey: Math.round(ov.recurrenceId.toUnixTime()),
       seriesId: master.id,
       uid: master.uid,
       startUtc,
@@ -105,6 +106,7 @@ function buildInstance(input: BuildInput): Instance {
 
   return {
     key: startUtc,
+    recurrenceKey: startUtc,
     seriesId: master.id,
     uid: master.uid,
     startUtc,

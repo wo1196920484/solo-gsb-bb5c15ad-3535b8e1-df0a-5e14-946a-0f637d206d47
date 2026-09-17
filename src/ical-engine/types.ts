@@ -92,6 +92,12 @@ export type InstanceSource =
 export interface Instance {
   /** 同组内稳定 key：recurrenceId 的 unix 秒 */
   key: number;
+  /**
+   * 实例身份用的原始 recurrence key（unix 秒）：
+   * 普通 RRULE/RDATE/单次实例取其原始起点；覆盖实例取 RECURRENCE-ID 对应时刻。
+   * 覆盖改期后 startUtc 变化，但 recurrenceKey 不变，变更比对据此识别“移动”而非一删一增。
+   */
+  recurrenceKey: number;
   seriesId: string;
   uid: string;
   /** 实例原始起点（按声明时区解释）绝对时间，秒 */
