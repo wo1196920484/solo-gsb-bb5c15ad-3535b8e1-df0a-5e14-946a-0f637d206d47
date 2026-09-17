@@ -83,6 +83,8 @@ function buildInstance(input: BuildInput): Instance {
       key: startUtc,
       seriesId: master.id,
       uid: master.uid,
+      // 移动后的实例仍以 RECURRENCE-ID 槽位作为原始 recurrence key
+      recurKey: Math.round(ov.recurrenceId.toUnixTime()),
       startUtc,
       endUtc,
       tzid,
@@ -107,6 +109,7 @@ function buildInstance(input: BuildInput): Instance {
     key: startUtc,
     seriesId: master.id,
     uid: master.uid,
+    recurKey: startUtc,
     startUtc,
     endUtc,
     tzid,

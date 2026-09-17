@@ -94,6 +94,12 @@ export interface Instance {
   key: number;
   seriesId: string;
   uid: string;
+  /**
+   * 原始 recurrence key：该实例在主事件序列上“槽位”的绝对时间（秒）。
+   * 普通实例取自身起点；被例外（含改时移动的）覆盖的槽位取 RECURRENCE-ID，
+   * 使规则编辑/例外停用前后的同一逻辑实例身份保持一致，避免移动被误报为一删一增。
+   */
+  recurKey: number;
   /** 实例原始起点（按声明时区解释）绝对时间，秒 */
   startUtc: number;
   /** 实例原始终点绝对时间，秒 */

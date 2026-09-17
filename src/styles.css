@@ -615,3 +615,181 @@ details[open] .caret::before {
   gap: 4px;
   align-items: center;
 }
+
+/* ---------- 变更影响 ---------- */
+
+.impact-empty-sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.impact-filters {
+  gap: 6px;
+}
+
+button.kind-chip {
+  padding: 2px 10px;
+  font-size: 11px;
+  border-radius: 11px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  background: transparent;
+}
+
+button.kind-chip.on {
+  color: #fff;
+}
+
+button.kind-chip.added.on,
+button.kind-chip.added:not(:disabled):hover {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+button.kind-chip.added.on {
+  background: rgba(52, 192, 138, 0.18);
+  color: var(--ok);
+}
+
+button.kind-chip.removed.on,
+button.kind-chip.removed:not(:disabled):hover {
+  border-color: var(--cancelled);
+  color: var(--cancelled);
+}
+button.kind-chip.removed.on {
+  background: rgba(239, 95, 103, 0.18);
+}
+
+button.kind-chip.start.on,
+button.kind-chip.end.on,
+button.kind-chip.start:not(:disabled):hover,
+button.kind-chip.end:not(:disabled):hover {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+button.kind-chip.start.on,
+button.kind-chip.end.on {
+  background: rgba(232, 168, 56, 0.16);
+}
+
+button.kind-chip.summary.on,
+button.kind-chip.location.on,
+button.kind-chip.status.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.impact-table th {
+  white-space: nowrap;
+}
+
+tr.impact-row td {
+  vertical-align: top;
+}
+
+.kind-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 0 7px;
+  margin: 1px 4px 1px 0;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.kind-badge.added {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: rgba(52, 192, 138, 0.1);
+}
+
+.kind-badge.removed {
+  color: var(--cancelled);
+  border-color: var(--cancelled);
+  background: rgba(239, 95, 103, 0.1);
+}
+
+.kind-badge.start,
+.kind-badge.end {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: rgba(232, 168, 56, 0.1);
+}
+
+.kind-badge.summary,
+.kind-badge.location,
+.kind-badge.status {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.impact-uid {
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+.diff-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.diff-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.diff-field-name {
+  font-size: 10px;
+  color: var(--text-dim);
+  width: 28px;
+  flex: none;
+}
+
+.diff-line .val {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.diff-line .val.before,
+.diff-side .val.before {
+  color: var(--cancelled);
+}
+
+.diff-line .val.after {
+  color: var(--ok);
+}
+
+.diff-line .val.before,
+.diff-line .val.after {
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+}
+
+.diff-line .val.before:hover,
+.diff-line .val.after:hover {
+  border-bottom-color: currentColor;
+}
+
+.diff-arrow {
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
+.diff-side {
+  cursor: pointer;
+}
+
+.diff-side .val {
+  color: var(--text);
+}
+
+tr.impact-row:has(.diff-side) {
+  cursor: pointer;
+}

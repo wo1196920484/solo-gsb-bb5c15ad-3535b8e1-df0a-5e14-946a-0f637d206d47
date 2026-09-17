@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { parseCalendar } from './ical-engine/parser';
 import { expandAll } from './ical-engine/expansion';
 import { detectConflicts, instanceId } from './ical-engine/conflicts';
+import { diffInstances } from './ical-engine/impact';
 import { normalizeCalendar } from './ical-engine/normalizer';
 import { SAMPLE_ICS } from './ical-engine/samples';
 import type {
@@ -11,8 +12,11 @@ import type {
   ParsedCalendar,
   Warning,
 } from './ical-engine/types';
+import type { ImpactChange } from './ical-engine/impact';
 import { SourceView } from './components/SourceView';
 import { InstanceTable } from './components/InstanceTable';
+import type { AuditTab } from './components/InstanceTable';
+import { ImpactView } from './components/ImpactView';
 import { SeriesPanel } from './components/SeriesPanel';
 import { addDays, downloadText, localMidnightUtcSec, ymd } from './utils/format';
 
@@ -20,10 +24,16 @@ type ParseOutcome =
   | ({ ok: true } & ParsedCalendar)
   | { ok: false; fatal: string; warnings: Warning[]; logicalLines: string[] };
 
+type RightTab = AuditTab | 'impact';
+
 interface Selection {
   instanceKey: string | null;
   seriesId: string | null;
   overrideId: string | null;
+  /** 变更影响视图当前选中的身份（uid#recurKey） */
+  impactId: string | null;
+  /** 差异项选择的是变更前还是变更后（影响源码定位行） */
+  impactSide: 'before' | 'after' | null;
   /** 源码高亮的附加块（冲突方） */
   conflictRanges: { start: number; end: number; kind: 'conflict' }[];
   focusLine?: number;
@@ -34,6 +44,8 @@ const EMPTY_SELECTION: Selection = {
   instanceKey: null,
   seriesId: null,
   overrideId: null,
+  impactId: null,
+  impactSide: null,
   conflictRanges: [],
   token: '',
 };
@@ -51,6 +63,7 @@ export default function App() {
   const [disabledOverrides, setDisabledOverrides] = useState<Set<string>>(new Set());
   const [editedRrule, setEditedRrule] = useState<Record<string, string>>({});
   const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
+  const [rightTab, setRightTab] = useState<RightTab>('visible');
 
   const reparse = useCallback((text: string): ParseOutcome => {
     const result = parseCalendar(text);
@@ -91,6 +104,21 @@ export default function App() {
     return expandAll(outcome.masters, range, { disabledOverrides, editedRrule });
   }, [outcome, range, disabledOverrides, editedRrule]);
 
+  // 变更影响的基线：原始日历在相同范围内的生效实例（无规则编辑、无例外停用）
+  const baseline = useMemo(() => {
+    if (!outcome?.ok || !range) return null;
+    return expandAll(outcome.masters, range, {
+      disabledOverrides: new Set<string>(),
+      editedRrule: {},
+    });
+  }, [outcome, range]);
+
+  // 重新解析、调整日期范围、编辑规则或停用例外后立即重算
+  const impact = useMemo(
+    () => (baseline && expansion ? diffInstances(baseline.instances, expansion.instances) : null),
+    [baseline, expansion]
+  );
+
   const conflicts = useMemo(
     () => (expansion ? detectConflicts(expansion.instances) : null),
     [expansion]
@@ -104,25 +132,35 @@ export default function App() {
   }, [outcome, expansion]);
 
   const selectedInstance = useMemo<Instance | null>(() => {
-    if (!expansion || !selection.instanceKey) return null;
-    const hit = expansion.instances.find((i) => instanceId(i) === selection.instanceKey);
-    if (hit) return hit;
-    return (
-      expansion.cancelled.find((i) => instanceId(i) === selection.instanceKey) ??
-      expansion.excluded.find((i) => instanceId(i) === selection.instanceKey) ??
-      null
-    );
-  }, [expansion, selection]);
+    if (!selection.instanceKey) return null;
+    const find = (e: typeof expansion): Instance | null =>
+      e
+        ? e.instances.find((i) => instanceId(i) === selection.instanceKey) ??
+          e.cancelled.find((i) => instanceId(i) === selection.instanceKey) ??
+          e.excluded.find((i) => instanceId(i) === selection.instanceKey) ??
+          null
+        : null;
+    // 差异项“变更前”可能与“变更后”同 instanceId（如停用 CANCELLED 后原实例恢复），
+    // 此时必须优先取基线对象，源码定位行才指向 RECURRENCE-ID 块
+    if (selection.impactSide === 'before') return find(baseline) ?? find(expansion);
+    return find(expansion) ?? find(baseline);
+  }, [expansion, baseline, selection]);
 
   // ---------- 交互 ----------
 
   const selectInstance = useCallback(
-    (inst: Instance) => {
+    (
+      inst: Instance,
+      impactIdentity: string | null = null,
+      impactSide: 'before' | 'after' | null = null
+    ) => {
       const peers = conflicts?.byKey.get(instanceId(inst)) ?? [];
       setSelection({
         instanceKey: instanceId(inst),
         seriesId: inst.seriesId,
         overrideId: inst.override?.id ?? null,
+        impactId: impactIdentity,
+        impactSide,
         conflictRanges: peers.map((p) => ({
           start: p.overrideRange?.start ?? p.masterRange.start,
           end: p.overrideRange?.end ?? p.masterRange.end,
@@ -134,11 +172,32 @@ export default function App() {
     [conflicts]
   );
 
+  // 变更影响视图点击差异项：联动实例表页签与 ICS 源码定位
+  const selectImpactChange = useCallback(
+    (side: 'before' | 'after', change: ImpactChange) => {
+      const inst = side === 'after' ? change.after : change.before;
+      if (!inst) return;
+      // 候选侧实例在当前生效/取消/排除列表中时切到对应页签并选中；
+      // 变更前（尤其被规则裁掉的实例）不在当前实例表中时保持在变更影响页，仅联动源码
+      if (side === 'after') {
+        const inList = (list: Instance[]): boolean =>
+          list.some((i) => instanceId(i) === instanceId(inst));
+        if (expansion && inList(expansion.instances)) setRightTab('visible');
+        else if (expansion && inList(expansion.cancelled)) setRightTab('cancelled');
+        else if (expansion && inList(expansion.excluded)) setRightTab('excluded');
+      }
+      selectInstance(inst, change.id, side);
+    },
+    [expansion, selectInstance]
+  );
+
   const focusSeries = useCallback((m: MasterSeries) => {
     setSelection({
       instanceKey: null,
       seriesId: m.id,
       overrideId: null,
+      impactId: null,
+      impactSide: null,
       conflictRanges: [],
       token: `series-${m.id}-${Date.now()}`,
     });
@@ -149,6 +208,8 @@ export default function App() {
       instanceKey: prev.instanceKey,
       seriesId: ov.id.split('#')[0],
       overrideId: ov.id,
+      impactId: null,
+      impactSide: null,
       conflictRanges: [],
       token: `ov-${ov.id}`,
     }));
@@ -216,9 +277,11 @@ export default function App() {
     const ov = m.overrides.find((o) => o.id === selection.overrideId);
     return {
       masterRange: m.block.range,
-      originLine: ov
-        ? ov.block.propLines['RECURRENCE-ID']?.[0] ?? m.block.range.start
-        : m.rruleLine || m.block.propLines['DTSTART']?.[0],
+      originLine:
+        selection.focusLine ??
+        (ov
+          ? ov.block.propLines['RECURRENCE-ID']?.[0] ?? m.block.range.start
+          : m.rruleLine || m.block.propLines['DTSTART']?.[0]),
       overrideRange: ov?.block.range,
       highlightRanges: [] as { start: number; end: number; kind: 'conflict' }[],
     };
@@ -393,17 +456,55 @@ export default function App() {
           )}
         </section>
 
-        {/* 右：实例与冲突 */}
+        {/* 右：实例、变更影响与冲突 */}
         <section className="pane">
-          <div className="pane-title">实例列表 / LOCATION 冲突</div>
+          <div className="pane-title">实例列表 / 变更影响 / LOCATION 冲突</div>
           {expansion ? (
-            <InstanceTable
-              instances={expansion.instances}
-              cancelled={expansion.cancelled}
-              excluded={expansion.excluded}
-              selectedKey={selection.instanceKey}
-              onSelect={selectInstance}
-            />
+            <>
+              <div className="tabs">
+                <button
+                  className={rightTab === 'visible' ? 'active' : ''}
+                  onClick={() => setRightTab('visible')}
+                >
+                  生效实例（{expansion.instances.length}）
+                </button>
+                <button
+                  className={rightTab === 'cancelled' ? 'active' : ''}
+                  onClick={() => setRightTab('cancelled')}
+                >
+                  已取消（{expansion.cancelled.length}）
+                </button>
+                <button
+                  className={rightTab === 'excluded' ? 'active' : ''}
+                  onClick={() => setRightTab('excluded')}
+                >
+                  已排除（{expansion.excluded.length}）
+                </button>
+                <button
+                  className={rightTab === 'impact' ? 'active' : ''}
+                  onClick={() => setRightTab('impact')}
+                  title="比较原始日历与规则编辑、例外停用后的生效实例"
+                >
+                  变更影响（{impact?.length ?? 0}）
+                </button>
+              </div>
+              {rightTab === 'impact' && impact ? (
+                <ImpactView
+                  changes={impact}
+                  selectedId={selection.impactId}
+                  onSelect={selectImpactChange}
+                />
+              ) : (
+                <InstanceTable
+                  tab={rightTab === 'impact' ? 'visible' : rightTab}
+                  instances={expansion.instances}
+                  cancelled={expansion.cancelled}
+                  excluded={expansion.excluded}
+                  selectedKey={selection.instanceKey}
+                  onSelect={(inst) => selectInstance(inst)}
+                />
+              )}
+            </>
           ) : (
             <div className="empty-hint">
               {outcome && !outcome.ok ? '解析失败，请修正左侧输入' : '暂无展开结果'}

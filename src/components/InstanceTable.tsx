@@ -6,6 +6,7 @@ import { formatWall, formatOffset } from '../utils/format';
 export type AuditTab = 'visible' | 'cancelled' | 'excluded';
 
 interface InstanceTableProps {
+  tab: AuditTab;
   instances: Instance[];
   cancelled: Instance[];
   excluded: Instance[];
@@ -20,8 +21,7 @@ const SOURCE_LABEL: Record<Instance['source'], string> = {
   single: '单次',
 };
 
-export function InstanceTable({ instances, cancelled, excluded, selectedKey, onSelect }: InstanceTableProps) {
-  const [tab, setTab] = useState<AuditTab>('visible');
+export function InstanceTable({ tab, instances, cancelled, excluded, selectedKey, onSelect }: InstanceTableProps) {
   const [locFilter, setLocFilter] = useState('');
   const [onlyConflicts, setOnlyConflicts] = useState(false);
 
@@ -48,17 +48,6 @@ export function InstanceTable({ instances, cancelled, excluded, selectedKey, onS
 
   return (
     <>
-      <div className="tabs">
-        <button className={tab === 'visible' ? 'active' : ''} onClick={() => setTab('visible')}>
-          生效实例（{instances.length}）
-        </button>
-        <button className={tab === 'cancelled' ? 'active' : ''} onClick={() => setTab('cancelled')}>
-          已取消（{cancelled.length}）
-        </button>
-        <button className={tab === 'excluded' ? 'active' : ''} onClick={() => setTab('excluded')}>
-          已排除（{excluded.length}）
-        </button>
-      </div>
       <div className="filter-bar">
         <input
           type="text"

@@ -21,6 +21,7 @@
 | 联动定位 | 点击实例/冲突/告警，右侧原始 ICS 高亮所属主事件块、RECURRENCE-ID 块与原始行号 |
 | 例外停用 | 勾选框即时停用任意一条例外（含 CANCELLED），原实例立即恢复并重算冲突 |
 | 规则编辑 | 就地修改 RRULE 文本，合法即实时重算；非法时显示解析错误并回退到上一条有效规则 |
+| 变更影响 | 以 UID + 原始 recurrence key 为实例身份，比较原始日历与规则编辑、例外停用后的生效实例：新增 / 移除 / 开始·结束移动 / 标题·地点·状态变化，可按类型筛选并显示前后值，点击联动实例表与 ICS 源码定位 |
 | 规范化导出 | 输出 CRLF、RFC 5545 折行、按 UID 排序、内聚所需 VTIMEZONE（含合成时区），可下载/复制 |
 
 ## 一条命令启动（Docker）
@@ -65,7 +66,7 @@ npm run dev        # http://localhost:5173
 ```bash
 npm run build      # 类型检查 + 生产构建到 dist/
 npm run preview    # 本地预览生产构建 http://localhost:4173
-npm run smoke      # 引擎语义冒烟测试（RRULE/RDATE/EXDATE/覆盖/取消/DST/冲突/导出）
+npm run smoke      # 引擎语义冒烟测试（RRULE/RDATE/EXDATE/覆盖/取消/DST/冲突/变更影响/导出）
 ```
 
 ## 使用指引
@@ -77,10 +78,15 @@ npm run smoke      # 引擎语义冒烟测试（RRULE/RDATE/EXDATE/覆盖/取消
      红框=冲突方事件块，高亮行=RRULE/RDATE/EXDATE/RECURRENCE-ID 原始行）。
    - **中栏**：每个 UID 一张规则卡，可编辑 RRULE、勾选停用具条例外，并显示
      RDATE/EXDATE 清单与行号。
-   - **右栏**：实例表三个页签——生效 / 已取消 / 已排除；支持地点关键字过滤与
+   - **右栏**：实例表四个页签——生效 / 已取消 / 已排除 / **变更影响**；生效页支持地点关键字过滤与
      「仅看冲突」。DST 标记表示该实例相对序列首个实例的 UTC 偏移已变化。
 4. 点击任一实例：右表选中、左栏原文同步定位；有冲突时冲突方事件块同步红框高亮。
-5. 点右上「导出规范化 ICS」下载 `normalized.ics`，或「复制 ICS」到剪贴板。
+5. 在中栏编辑 RRULE 或停用例外后，「变更影响」页立即重算：仅候选侧存在标为新增、仅原始侧存在标为
+   移除；同一身份（UID + 原始 recurrence key）分别标出开始/结束移动及标题、地点、状态变化（移动不会
+   误报成一删一增）。点类型徽标可按变更类型筛选；点击前后值联动实例表对应页签与 ICS 源码行，
+   「变更前」实例不在当前列表时仍会在左栏定位到其原始块；无有效改动时显示空状态。调整日期范围或
+   重新解析后自动重算。
+6. 点右上「导出规范化 ICS」下载 `normalized.ics`，或「复制 ICS」到剪贴板。
 
 ## 语义约定
 
@@ -92,6 +98,9 @@ npm run smoke      # 引擎语义冒烟测试（RRULE/RDATE/EXDATE/覆盖/取消
 - **合成 VTIMEZONE**：基于展开时间窗（DTSTART/UNTIL 年份前后取余量）探测 DST 切换点，
   仅保证窗内精确；导出的 ICS 建议在目标日历客户端复验。
 - 暂不支持 `RECURRENCE-ID;RANGE=THISANDFUTURE`（按单实例覆盖处理并给出告警）。
+- **变更影响身份**：差异比较只取当前查询范围内两侧的**生效实例**（已取消/已排除不参与），身份为
+  `UID + 原始 recurrence key`；被例外改时移动的实例仍以其 RECURRENCE-ID 槽位为身份，因此规则编辑、
+  例外停用造成的时间/属性变化按同身份逐字段对比，不会被报成“一删一增”。
 
 ## 目录结构
 
@@ -102,10 +111,11 @@ src/
 │   ├── timezones.ts    # Intl 探测 DST 切换点，合成 VTIMEZONE
 │   ├── expansion.ts    # RRULE 迭代 + RDATE/EXDATE/覆盖/取消 + 范围与上限
 │   ├── conflicts.ts    # LOCATION 维度半开区间重叠检测
+│   ├── impact.ts       # 变更影响：UID+原始 recurrence key 身份比对，字段级前后值
 │   ├── normalizer.ts   # 规范化 ICS 输出（排序、时区内聚、规则/停用生效）
 │   ├── types.ts        # 领域模型
 │   └── samples.ts      # 内置示例
-├── components/         # SourceView / InstanceTable / SeriesPanel
+├── components/         # SourceView / InstanceTable / ImpactView / SeriesPanel
 ├── utils/format.ts
 ├── App.tsx
 └── main.tsx

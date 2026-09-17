@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { parseCalendar } from '../src/ical-engine/parser';
 import { expandAll } from '../src/ical-engine/expansion';
 import { detectConflicts, instanceId } from '../src/ical-engine/conflicts';
+import { diffInstances, impactId as impactIdOf } from '../src/ical-engine/impact';
 import { normalizeCalendar } from '../src/ical-engine/normalizer';
 
 const ICS = `BEGIN:VCALENDAR
@@ -227,6 +228,71 @@ assert.ok(norm3.ics.includes('FREQ=WEEKLY;COUNT=2'), 'edited rrule exported');
 // round-trip parse of normalized output
 const reparsed = parseCalendar(norm.ics);
 assert.ok(!('fatal' in reparsed), 'normalized output reparses');
+
+// 11) 变更影响：无编辑时无差异
+const noChanges = diffInstances(expanded.instances, expanded.instances);
+assert.strictEqual(noChanges.length, 0, 'identical expansions -> no impact');
+
+const baseline = expandAll(masters, range, {
+  disabledOverrides: new Set(),
+  editedRrule: {},
+});
+
+// 停用“移动+改地点”例外：同一身份（UID + 原始 recurrence key）下开始/结束回移、标题与地点还原，
+// 不得报成一删一增
+const moveOv = daily.overrides.find((o) => !o.cancelled)!;
+const effDisabledMove = expandAll(masters, range, {
+  disabledOverrides: new Set([moveOv.id]),
+  editedRrule: {},
+});
+const dMove = diffInstances(baseline.instances, effDisabledMove.instances);
+const movedSlot = Math.round(moveOv.recurrenceId.toUnixTime());
+const rowMove = dMove.find((c) => c.uid === 'daily@x' && c.recurKey === movedSlot);
+assert.ok(rowMove, 'moved override disable yields one matched change row');
+assert.ok(rowMove!.before && rowMove!.after, 'both sides present (not add/remove)');
+assert.ok(!rowMove!.kinds.includes('added') && !rowMove!.kinds.includes('removed'),
+  'time move must not be reported as add+remove');
+assert.ok(rowMove!.kinds.includes('start'), 'start moved back');
+assert.ok(rowMove!.kinds.includes('end'), 'end moved back');
+assert.ok(rowMove!.kinds.includes('summary'), 'summary restored');
+assert.ok(rowMove!.kinds.includes('location'), 'location restored');
+// 前后开始时间分别为 11:00 EDT（15:00Z）与 09:00 EDT（13:00Z）
+assert.strictEqual(rowMove!.before!.startUtc, utc(2026, 2, 9, 15));
+assert.strictEqual(rowMove!.after!.startUtc, utc(2026, 2, 9, 13));
+
+// 停用 CANCELLED 例外：被取消的槽位以“新增”恢复（基线里它不在生效列表）
+const cancelOv = daily.overrides.find((o) => o.cancelled)!;
+const effDisabledCancel = expandAll(masters, range, {
+  disabledOverrides: new Set([cancelOv.id]),
+  editedRrule: {},
+});
+const dCancel = diffInstances(baseline.instances, effDisabledCancel.instances);
+const cancelSlot = Math.round(cancelOv.recurrenceId.toUnixTime());
+const rowCancel = dCancel.find((c) => c.uid === 'daily@x' && c.recurKey === cancelSlot);
+assert.ok(rowCancel, 'cancelled slot appears as a change');
+assert.deepStrictEqual(rowCancel!.kinds, ['added'], 'disabling CANCELLED restores instance as added');
+
+// 编辑 RRULE（FREQ=WEEKLY;COUNT=2）：原序列大量实例移除，3/9 槽位因例外移动仍为同一身份
+const effWeekly = expandAll(masters, range, {
+  disabledOverrides: new Set(),
+  editedRrule: { 'daily@x': 'FREQ=WEEKLY;COUNT=2' },
+});
+const dWeekly = diffInstances(baseline.instances, effWeekly.instances);
+const removedDaily = dWeekly.filter(
+  (c) => c.uid === 'daily@x' && c.kinds.length === 1 && c.kinds[0] === 'removed'
+).length;
+assert.ok(removedDaily >= 9, 'daily occurrences beyond weekly count removed');
+// Mar 9 槽位两侧都存在（例外移动后的实例），身份相同且取值一致：不应出现在增/删列表中
+const mar9SlotKey = `daily@x#${movedSlot}`;
+assert.ok(
+  !dWeekly.some((c) => c.id === mar9SlotKey && (c.kinds.includes('added') || c.kinds.includes('removed'))),
+  'override at Mar 9 must not be add/removed when rule changes'
+);
+assert.ok(
+  effWeekly.instances.some((i) => impactIdOf(i) === mar9SlotKey) &&
+    baseline.instances.some((i) => impactIdOf(i) === mar9SlotKey),
+  'Mar 9 slot present on both sides with identical identity'
+);
 
 console.log('✓ all engine smoke tests passed');
 console.log(`  instances=${expanded.instances.length} cancelled=${expanded.cancelled.length} excluded=${expanded.excluded.length} conflictGroups=${conflicts.groups.length}`);
